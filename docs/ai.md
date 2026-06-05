@@ -15,18 +15,22 @@ Bluefin's focus in AI is providing a generic API endpoint to the operating syste
 
 ## Bluespeed
 
-"Bluespeed" is our collection of Bluefin's [developer experience](/bluefin-dx) tools and support for AI development workflows. We do this via community managed set of tool recommendations and configuration. We believe that the operating system should have more API endpoints for AI.
+"Bluespeed" is our collection of Bluefin's [developer experience](/bluefin-dx) tools and support for AI development workflows. We do this via community-managed set of tool recommendations and configurations. We believe that the operating system should have more API endpoints for AI.
 
-- "Bring your own LLM" aproach, it should be easy to switch between local models and hosted ones
-  - [Goose](https://block.github.io/goose/) as the primary interface to hosted and local models
 - Accelerate open standards in AI by shipping tools from the [Agentic AI Foundation](https://aaif.io/), [CNCF](https://cncf.io), and other foundations
-- Local LLM service management
-  - Model management via `ramalama` and Docker Model, your choice
-- GPU Acceleration for both Nvidia and AMD are included out of the box and usually do not require any extra setup
-- Highlight great AI/ML applications on FlatHub in our curated section in the App Store
-- A great reason to [sell more swag](https://store.projectbluefin.io)
-
-We work closely with the [RHEL Lightspeed team](https://github.com/rhel-lightspeed) by shipping their code, giving feedback, and pushing the envelope where we can.
+  - Promoting [Goose](https://goose-docs.ai) as the primary interface for local and hosted models
+  - We also work closely with the [RHEL Lightspeed team](https://github.com/rhel-lightspeed) by shipping their code, giving feedback, and pushing the envelope where we can
+- Make it easy to run and manage local LLM
+   - Model management via `ramalama` and Docker Model, your choice
+   - GPU Acceleration for both Nvidia and AMD are included out of the box and usually do not require any extra setup
+- "Bring your own LLM" approach, it should be easy to switch between local models and hosted ones
+  - Provide access to various AI & agentic tooling via Brew, like [OpenCode](https://opencode.ai), [Zed](https://zed.dev) and more
+  - Highlight great AI/ML applications on FlatHub in our curated section in the App Store
+- Explore what's possible with the new tools & paradigm
+  - Easy way for Bluefin users to [crowdsource & confirm issues with privacy-first principles](https://github.com/projectbluefin/bonedigger)
+  - Automate [end-to-end testing](https://github.com/projectbluefin/testsuite) and catch regressions early across operating system, GNOME, apps & extensions
+  - [Manage issues & pull requests](https://docs.projectbluefin.io/hive/) across `projectbluefin` org with improved observability, thanks to [Kubestellar Hive](https://github.com/kubestellar/hive)
+- Forming **Bluespeed** presents us great [swag possibilities](https://store.projectbluefin.io) in the future
 
 ## AI Lab with Podman Desktop
 
