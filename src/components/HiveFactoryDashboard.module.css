@@ -176,12 +176,20 @@
   font-family: "SFMono-Regular", Consolas, monospace;
 }
 
-/* ── Stats row ──────────────────────────────────────────────────────────── */
+/* ── Stats row — always fixed 6 columns ─────────────────────────────────── */
 .statsRow {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  grid-template-columns: repeat(6, 1fr);
   gap: 0.875rem;
   margin-bottom: 1.75rem;
+}
+
+@media (max-width: 1100px) {
+  .statsRow { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (max-width: 600px) {
+  .statsRow { grid-template-columns: repeat(2, 1fr); }
 }
 
 .statCard {
@@ -375,6 +383,43 @@
   .twoCol {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Factory floor (asymmetric 2-col: main | sidebar) ───────────────────── */
+.factoryFloor {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 1.25rem;
+  margin-bottom: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 1024px) {
+  .factoryFloor { grid-template-columns: 1fr; }
+}
+
+/* Sidebar stack inside factory floor right column */
+.factorySidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+/* ── Intelligence zone (3 equal columns) ────────────────────────────────── */
+.intelligenceZone {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 1.25rem;
+  margin-bottom: 1.25rem;
+  align-items: start;
+}
+
+@media (max-width: 1024px) {
+  .intelligenceZone { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 640px) {
+  .intelligenceZone { grid-template-columns: 1fr; }
 }
 
 /* ── Agent grid ─────────────────────────────────────────────────────────── */
@@ -954,6 +999,21 @@
   background: rgba(245, 158, 11, 0.08);
   box-shadow: 0 0 8px rgba(245, 158, 11, 0.2);
 }
+.modeBusy {
+  color: #d97706;
+  border-color: rgba(217, 119, 6, 0.4);
+  background: rgba(217, 119, 6, 0.08);
+}
+.modeQuiet {
+  color: #3b82f6;
+  border-color: rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.06);
+}
+.modeIdle {
+  color: #484f58;
+  border-color: rgba(72, 79, 88, 0.3);
+  background: rgba(72, 79, 88, 0.04);
+}
 .modeNormal {
   color: #58a6ff;
   border-color: rgba(88, 166, 255, 0.3);
@@ -1428,14 +1488,40 @@
 .govModeBusy { color: #d29922; background: rgba(210, 153, 34, 0.12); }
 .govModeQuiet { color: #58a6ff; background: rgba(88, 166, 255, 0.12); }
 .govModeIdle { color: #8b949e; background: rgba(139, 148, 158, 0.12); }
+.govThreshOuter {
+  position: relative;
+  margin-top: 0.9rem;
+  padding-top: 1.5rem; /* room for the floating depth label */
+}
+.govThreshMarkerLabel {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.govThreshMarkerLabel::after {
+  content: "";
+  display: block;
+  width: 0;
+  height: 0;
+  margin: 2px auto 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+}
 .govThreshBar {
   position: relative;
   display: flex;
   align-items: stretch;
   overflow: hidden;
   border-radius: 999px;
-  margin-top: 0.9rem;
+  margin-top: 0; /* spacing now handled by govThreshOuter */
   border: 1px solid rgba(139, 148, 158, 0.2);
+  height: 28px; /* taller bar for better readability */
 }
 .govThreshZoneQuiet,
 .govThreshZoneBusy,
@@ -1445,17 +1531,19 @@
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.06em;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .govThreshZoneQuiet { background: rgba(88, 166, 255, 0.14); color: #58a6ff; }
 .govThreshZoneBusy { background: rgba(210, 153, 34, 0.14); color: #d29922; }
 .govThreshZoneSurge { background: rgba(248, 81, 73, 0.14); color: #f85149; }
 .govThreshMarker {
   position: absolute;
-  top: -2px;
-  bottom: -2px;
-  width: 2px;
-  background: #f0f6fc;
-  box-shadow: 0 0 0 1px rgba(13, 17, 23, 0.6);
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  transform: translateX(-50%);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
 }
 .govThreshLegend {
   display: flex;
@@ -1603,6 +1691,8 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1.5rem;
+  align-items: stretch;
+  margin-bottom: 1.25rem;
 }
 
 @media (max-width: 900px) {
@@ -1619,6 +1709,7 @@
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-height: 400px;
 }
 
 .destinyColTitle {
@@ -1690,6 +1781,66 @@
   background: rgba(139, 148, 158, 0.1);
   color: #8b949e;
   border: 1px solid rgba(139, 148, 158, 0.2);
+}
+
+.prTierLabelEpic {
+  background: rgba(217, 119, 6, 0.15);
+  color: #d97706;
+  border: 1px solid rgba(217, 119, 6, 0.35);
+}
+
+.prTierLabelAgent {
+  background: rgba(147, 197, 253, 0.12);
+  color: #93c5fd;
+  border: 1px solid rgba(147, 197, 253, 0.25);
+}
+
+.agentTypeBadgeHive {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: rgba(217, 119, 6, 0.15);
+  color: #d97706;
+  border: 1px solid rgba(217, 119, 6, 0.3);
+  text-transform: uppercase;
+}
+
+.agentTypeBadgeCopilot {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: rgba(37, 99, 235, 0.15);
+  color: #93c5fd;
+  border: 1px solid rgba(37, 99, 235, 0.3);
+  text-transform: uppercase;
+}
+
+.prDraftBadge {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  background: rgba(139, 148, 158, 0.15);
+  color: #8b949e;
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  margin-right: 0.4rem;
+  vertical-align: middle;
+  text-transform: uppercase;
+}
+
+.commentCount {
+  font-size: 0.68rem;
+  color: #8b949e;
+  background: rgba(139, 148, 158, 0.1);
+  border: 1px solid rgba(139, 148, 158, 0.15);
+  border-radius: 3px;
+  padding: 0.1rem 0.4rem;
 }
 
 .prTierCount {
@@ -2197,6 +2348,183 @@
   color: #8b949e;
   font-variant-numeric: tabular-nums;
   margin-top: 0.1rem;
+}
+
+/* ── Community Showcase ─────────────────────────────────────────────────── */
+
+.communityStats {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  padding: 0.75rem 1rem;
+  background: rgba(88, 166, 255, 0.06);
+  border: 1px solid rgba(88, 166, 255, 0.18);
+  border-radius: 8px;
+}
+
+.communityStatItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+}
+
+.communityStatValue {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #58a6ff;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.communityStatLabel {
+  font-size: 0.7rem;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.communityStatDivider {
+  width: 1px;
+  height: 2rem;
+  background: rgba(88, 166, 255, 0.2);
+  flex-shrink: 0;
+}
+
+.communitySpotlightLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #d97706;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0 0 0.75rem 0;
+}
+
+.communitySpotlight {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.spotlightCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.85rem 0.5rem 0.75rem;
+  background: #161b22;
+  border: 1px solid rgba(88, 166, 255, 0.18);
+  border-radius: 10px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s, background 0.15s, transform 0.1s;
+}
+
+.spotlightCard:hover {
+  border-color: rgba(88, 166, 255, 0.55);
+  background: rgba(88, 166, 255, 0.07);
+  transform: translateY(-2px);
+  text-decoration: none;
+  color: inherit;
+}
+
+.spotlightAvatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 2px solid rgba(88, 166, 255, 0.35);
+}
+
+.spotlightName {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #c9d1d9;
+  text-align: center;
+  word-break: break-word;
+  margin-top: 0.15rem;
+}
+
+.spotlightCommits {
+  font-size: 0.68rem;
+  color: #58a6ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.spotlightRepos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  justify-content: center;
+  margin-top: 0.2rem;
+}
+
+.spotlightRepoChip {
+  font-size: 0.58rem;
+  padding: 0.1rem 0.35rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  color: #8b949e;
+  white-space: nowrap;
+  max-width: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spotlightBadge {
+  font-size: 0.58rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid;
+  border-radius: 999px;
+  margin-top: 0.15rem;
+  letter-spacing: 0.03em;
+}
+
+.communityShowMore {
+  margin-top: 0.85rem;
+  padding: 0.4rem 1rem;
+  background: transparent;
+  border: 1px solid rgba(88, 166, 255, 0.3);
+  border-radius: 6px;
+  color: #58a6ff;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.communityShowMore:hover {
+  background: rgba(88, 166, 255, 0.08);
+  border-color: rgba(88, 166, 255, 0.6);
+}
+
+/* ── Leaderboard accumulating state ────────────────────────────────────── */
+
+.lbAccumulating {
+  color: #d29922;
+  font-style: italic;
+}
+
+.lbTabDisabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.lbTabPending {
+  color: #d29922;
+  margin-left: 0.15rem;
+}
+
+.lbFallbackNote {
+  font-size: 0.78rem;
+  color: #d29922;
+  padding: 0.4rem 0.75rem;
+  background: rgba(210, 153, 34, 0.08);
+  border: 1px solid rgba(210, 153, 34, 0.25);
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
 }
 
 /* ── History Trends ──────────────────────────────────────────────────────── */

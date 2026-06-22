@@ -6,9 +6,58 @@ import styles from "./HiveFactoryDashboard.module.css";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-interface HiveAgent {
+// ── Public registry (hive.kubestellar.io/api/registry) — no auth needed ──────
+
+interface RegistryAgent {
   name: string;
+  state: string; // "running" | "paused" | "idle"
+}
+
+interface RegistryHealthCheck {
+  name: string;
+  status: string; // "pass" | "fail" | "warn"
+  detail?: string;
+}
+
+interface RegistryLeaderboardEntry {
+  github_username: string;
+  avatar_url: string;
+  trust_tier: string;
+  tasks_completed: number;
+  tasks_failed: number;
+  active: boolean;
+}
+
+interface RegistryTimeSeries {
+  t: number; // unix seconds
+  v: number;
+}
+
+interface RegistryEntry {
   id: string;
+  org: string;
+  name: string;
+  acmmLevel: number;
+  agentCount: number;
+  governorMode: string;
+  actionableIssues: number;
+  actionablePRs: number;
+  totalTokens24h: number;
+  contributorCount: number;
+  activeContributors: number;
+  online: boolean;
+  version?: string;
+  agents: RegistryAgent[];
+  health: { status: string; checks: RegistryHealthCheck[]; fails: number; warns: number };
+  leaderboard: RegistryLeaderboardEntry[];
+  issueHistory: RegistryTimeSeries[];
+  prHistory: RegistryTimeSeries[];
+  lastHeartbeat?: string;
+}
+
+interface HiveAgent {
+  id: string;
+  name?: string;
   displayName: string;
   role: string;
   emoji: string;
@@ -148,19 +197,27 @@ interface Velocity {
   closed: number;
 }
 
-interface GitHubSearchResponse<T> {
-  total_count?: number;
-  items?: T[];
-}
-
-interface GitHubSearchIssueItem {
+interface CommunityDiscussion {
   number: number;
   title: string;
-  repository_url?: string;
-  pull_request?: { url?: string };
-  user?: { login?: string; type?: string };
-  updated_at: string;
   html_url: string;
+  repository_url?: string;
+  updated_at: string;
+  labels?: QueueLabel[];
+  comments?: number;
+  user?: { login?: string };
+}
+
+interface AgentAssistedPR {
+  number: number;
+  title: string;
+  html_url: string;
+  repository_url?: string;
+  updated_at: string;
+  labels?: QueueLabel[];
+  user?: { login?: string };
+  draft?: boolean;
+  agentType: "hive" | "copilot";
 }
 
 interface OrgStats {
@@ -178,6 +235,42 @@ interface RepoPRs {
   total: number;
   agentPRs: number;
   label: string;
+}
+
+// ── Build-time hive live data (from static/data/hive-live-data.json) ────────
+interface HiveLiveItem {
+  number: number;
+  title: string;
+  html_url: string;
+  repository_url?: string;
+  updated_at: string;
+  created_at?: string;
+  labels?: Array<{ name: string; color: string }>;
+  comments?: number;
+  user?: { login?: string; avatar_url?: string };
+  draft?: boolean;
+  pull_request?: { merged_at?: string | null };
+}
+
+interface HiveLiveData {
+  fetchedAt: string;
+  mergedPRs: HiveLiveItem[];
+  discussions: HiveLiveItem[];
+  hivePRs: HiveLiveItem[];
+  copilotPRs: HiveLiveItem[];
+  velocity: { opened: number; closed: number };
+  testBuilds: number;
+  tapPromotions: number;
+  agentMergedCount: number;
+  orgStats: {
+    totalRepos: number;
+    openIssues: number;
+    openPRs: number;
+    mergedThisWeek: number;
+    agentReadyIssues: number;
+    agentOpenPRs: number;
+    sourceAgentOpen: number;
+  };
 }
 
 // ── Hive history types ─────────────────────────────────────────────────────
@@ -223,14 +316,14 @@ interface HiveHistory {
 // ── Milestone badge definitions ───────────────────────────────────────────
 
 type MilestoneTier =
-  | "contributor"   // 10+ all-time commits
-  | "veteran"       // 100+ all-time commits
-  | "elite"         // 500+ all-time commits
-  | "legend"        // 1000+ all-time commits
-  | "mythic"        // 5000+ all-time commits
-  | "sprint"        // 10+ commits this week
-  | "rising"        // this week > rolling avg
-  | "cross";        // 3+ repos
+  | "contributor"   // 2+ repos
+  | "builder"       // 3+ repos
+  | "anchor"        // 5+ repos
+  | "legend"        // 7+ repos
+  | "cornerstone"   // 10+ repos
+  | "active"        // active this week
+  | "rising"        // trending up this week
+  | "cross";        // kept for compat
 
 interface MilestoneBadge {
   tier: MilestoneTier;
@@ -240,40 +333,34 @@ interface MilestoneBadge {
 }
 
 function computeMilestones(
-  total: number,
+  repoCount: number,
   lastWeek: number,
   lastMonth: number,
-  repos: string[],
 ): MilestoneBadge[] {
   const badges: MilestoneBadge[] = [];
 
-  // All-time tier (only show the highest earned)
-  if (total >= 5000) {
-    badges.push({ tier: "mythic", label: "Mythic", title: "5000+ lifetime commits", color: "#ff7b72" });
-  } else if (total >= 1000) {
-    badges.push({ tier: "legend", label: "Legend", title: "1000+ lifetime commits", color: "#f0883e" });
-  } else if (total >= 500) {
-    badges.push({ tier: "elite", label: "Elite", title: "500+ lifetime commits", color: "#bc8cff" });
-  } else if (total >= 100) {
-    badges.push({ tier: "veteran", label: "Veteran", title: "100+ lifetime commits", color: "#58a6ff" });
-  } else if (total >= 10) {
-    badges.push({ tier: "contributor", label: "Contributor", title: "10+ lifetime commits", color: "#3fb950" });
+  // Breadth tier — only the highest earned (commits don't matter in the age of AI)
+  if (repoCount >= 10) {
+    badges.push({ tier: "cornerstone", label: "Cornerstone", title: "Active across 10+ projects", color: "#ff7b72" });
+  } else if (repoCount >= 7) {
+    badges.push({ tier: "legend", label: "Legend", title: "Active across 7+ projects", color: "#f0883e" });
+  } else if (repoCount >= 5) {
+    badges.push({ tier: "anchor", label: "Anchor", title: "Active across 5+ projects", color: "#bc8cff" });
+  } else if (repoCount >= 3) {
+    badges.push({ tier: "builder", label: "Builder", title: "Active across 3+ projects", color: "#a371f7" });
+  } else if (repoCount >= 2) {
+    badges.push({ tier: "contributor", label: "Contributor", title: "Active across 2+ projects", color: "#3fb950" });
   }
 
-  // Activity badges
-  if (lastWeek >= 10) {
-    badges.push({ tier: "sprint", label: "Sprint", title: `${lastWeek} commits this week`, color: "#d29922" });
+  // Activity recency
+  if (lastWeek > 0) {
+    badges.push({ tier: "active", label: "Active", title: "Active this week", color: "#d29922" });
   }
 
-  // Weekly vs monthly avg (rising star)
+  // Rising trend
   const weeklyAvg = lastMonth > 0 ? lastMonth / 4 : 0;
   if (lastWeek > 0 && weeklyAvg > 0 && lastWeek > weeklyAvg * 1.5) {
     badges.push({ tier: "rising", label: "Rising", title: "Trending up this week", color: "#3fb950" });
-  }
-
-  // Cross-formation
-  if (repos.length >= 3) {
-    badges.push({ tier: "cross", label: "Multi-repo", title: `Active in ${repos.length} repos`, color: "#a371f7" });
   }
 
   return badges;
@@ -324,9 +411,24 @@ interface QueueData {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const SNAPSHOT_HTML_URL =
-  "https://raw.githubusercontent.com/kubestellar/docs/main/public/live/hive/bluefin/index.html";
-const QUEUE_URL = "https://queue.projectbluefin.io/data.json";
+// Hosted Knuckle instance — the canonical source; behind GitHub OAuth (hive.kubestellar.io).
+// Requests are sent with credentials:include so authenticated hive users get live data.
+// All fetches fall back gracefully when the user is not logged in.
+const HOSTED_INSTANCE_URL =
+  "https://hosted-projectbluefin-knuckle-gjvq.hive.kubestellar.io";
+
+// Public registry — no auth required, updated every ~15 min by the hub
+// Registry data is fetched at build time via scripts/fetch-registry-data.js
+// and served from /data/registry-data.json (avoids browser CORS block on live API)
+
+// Snapshot: fetch /api/status directly from the hosted Knuckle instance.
+// Credentials are included so authenticated hive users get live governor/agent data.
+// The old raw.githubusercontent.com HTML snapshot is no longer published.
+const SNAPSHOT_API_URL = `${HOSTED_INSTANCE_URL}/api/status`;
+
+// Queue data: try the hosted instance first (credentials:include), fall back to public mirror
+const QUEUE_URL_HOSTED = `${HOSTED_INSTANCE_URL}/data.json`;
+const QUEUE_URL_FALLBACK = "https://queue.projectbluefin.io/data.json";
 const GH_API = "https://api.github.com";
 const DAKOTA = "projectbluefin/dakota";
 const BUILD_WORKFLOW = "246164114";
@@ -574,14 +676,32 @@ async function extractRenderJson(
   return null;
 }
 
-async function fetchTimeout(url: string, ms = 12000): Promise<Response> {
+async function fetchTimeout(url: string, ms = 12000, opts?: RequestInit): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    return await fetch(url, { signal: ctrl.signal });
+    return await fetch(url, { signal: ctrl.signal, ...opts });
   } finally {
     clearTimeout(t);
   }
+}
+
+// Fetch queue data from the hosted instance first (works when the user has an active
+// hive.kubestellar.io session), falling back to the public mirror.
+async function fetchQueueData(): Promise<QueueData | null> {
+  try {
+    const r = await fetchTimeout(QUEUE_URL_HOSTED, 6000, { credentials: "include" });
+    if (r.ok) return (await r.json()) as QueueData;
+  } catch {
+    // not logged in or network error — fall through
+  }
+  try {
+    const r = await fetchTimeout(QUEUE_URL_FALLBACK, 10000);
+    if (r.ok) return (await r.json()) as QueueData;
+  } catch {
+    // both sources unavailable
+  }
+  return null;
 }
 
 function cleanSummaryLine(line: string): string {
@@ -658,31 +778,6 @@ function governorModeClass(mode?: string): string {
     case "quiet": return styles.govModeQuiet;
     default: return styles.govModeIdle;
   }
-}
-
-async function parseSearchCount(
-  result: PromiseSettledResult<Response>,
-): Promise<number> {
-  if (result.status !== "fulfilled" || !result.value.ok) return 0;
-  const data = (await result.value.json()) as GitHubSearchResponse<unknown>;
-  return data.total_count ?? 0;
-}
-
-async function parseMergedPRs(
-  result: PromiseSettledResult<Response>,
-): Promise<MergedPR[]> {
-  if (result.status !== "fulfilled" || !result.value.ok) return [];
-  const data = (await result.value.json()) as GitHubSearchResponse<GitHubSearchIssueItem>;
-  const items = Array.isArray(data.items) ? data.items : [];
-  return items.map((item) => ({
-    number: item.number,
-    title: item.title,
-    repo: parseRepoName(item.repository_url),
-    author: item.user?.login ?? "unknown",
-    isBot: item.user?.type === "Bot" || isBotLogin(item.user?.login ?? ""),
-    updatedAt: item.updated_at,
-    url: item.html_url,
-  }));
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
@@ -767,7 +862,7 @@ function FrameCard({ agent, advisoryItems: agentAdvisories }: { agent: HiveAgent
     >
       <div className={styles.agentCardHeader}>
         <span className={styles.agentInitial}>
-          {(agent.displayName || agent.name).slice(0, 1).toUpperCase()}
+          {(agent.displayName || agent.name || "?").slice(0, 1).toUpperCase()}
         </span>
         <div className={styles.agentMeta}>
           <span className={styles.agentName}>
@@ -1246,8 +1341,9 @@ function ContributorWall({
   prs: MergedPR[];
   history: HiveHistory | null;
 }) {
-  // Use org-wide history contributors if available; fall back to recent PRs
-  // Metric: repos active in (not commits)
+  const [showAll, setShowAll] = React.useState(false);
+
+  // Build sorted contributor list: breadth-first (repos active in), not commit count
   const orgContributors: OrgContributor[] = React.useMemo(() => {
     if (history?.contributors && Object.keys(history.contributors).length > 0) {
       const byRepo = history.contributorsByRepo ?? {};
@@ -1260,8 +1356,7 @@ function ContributorWall({
             .map(([repo]) => repo);
           return { login, commits, repos };
         })
-        .sort((a, b) => b.repos.length - a.repos.length || b.commits - a.commits)
-        .slice(0, 48);
+        .sort((a, b) => b.repos.length - a.repos.length || b.commits - a.commits);
     }
     // fallback: derive from recent PRs
     const seen = new Set<string>();
@@ -1276,45 +1371,160 @@ function ContributorWall({
   }, [history, prs]);
 
   const isOrgWide = history?.contributors && Object.keys(history.contributors).length > 0;
-  const totalHumans = orgContributors.length;
+  const activeThisMonth = isOrgWide
+    ? Object.values(history?.contributorStats ?? {}).filter((s) => (s.lastMonth ?? 0) > 0).length
+    : 0;
+
+  const SPOTLIGHT_COUNT = 12;
+  const GRID_INITIAL = 60;
+  const spotlight = orgContributors.slice(0, SPOTLIGHT_COUNT);
+  const rest = orgContributors.slice(SPOTLIGHT_COUNT);
+  const visibleRest = showAll ? rest : rest.slice(0, GRID_INITIAL);
+
+  const stats = history?.contributorStats ?? {};
 
   return (
     <section className={styles.panel}>
       <Heading as="h2" className={styles.panelTitle}>
-        Factory Contributors
+        Factory Community
       </Heading>
-      <p className={styles.panelMeta}>
-        {isOrgWide
-          ? `${totalHumans} humans active across factory repos`
-          : "Humans landing code in the latest merged queue"}
-      </p>
-      {orgContributors.length > 0 ? (
-        <div className={styles.contributorGrid}>
-          {orgContributors.map(({ login, repos }) => (
-            <Link
-              key={login}
-              href={`https://github.com/${login}`}
-              target="_blank"
-              rel="noreferrer"
-              className={styles.contributorCard}
-              title={repos.length > 0 ? `${login} · ${repos.slice(0, 3).join(", ")}` : login}
-            >
-              <img
-                src={`https://github.com/${login}.png?size=40`}
-                alt={login}
-                className={styles.contributorAvatar}
-                loading="lazy"
-              />
-              <span className={styles.contributorName}>{login}</span>
-              {repos.length > 0 && (
-                <span className={styles.contributorCommits}>{repos.length} repo{repos.length !== 1 ? "s" : ""}</span>
-              )}
-            </Link>
-          ))}
+
+      {isOrgWide && (
+        <div className={styles.communityStats}>
+          <div className={styles.communityStatItem}>
+            <span className={styles.communityStatValue}>{orgContributors.length}</span>
+            <span className={styles.communityStatLabel}>contributors</span>
+          </div>
+          <div className={styles.communityStatDivider} />
+          <div className={styles.communityStatItem}>
+            <span className={styles.communityStatValue}>
+              {Object.keys(history?.contributorsByRepo ?? {}).length}
+            </span>
+            <span className={styles.communityStatLabel}>repos</span>
+          </div>
+          <div className={styles.communityStatDivider} />
+          <div className={styles.communityStatItem}>
+            <span className={styles.communityStatValue}>
+              {activeThisMonth > 0 ? activeThisMonth : orgContributors.length}
+            </span>
+            <span className={styles.communityStatLabel}>
+              {activeThisMonth > 0 ? "active this month" : "total"}
+            </span>
+          </div>
         </div>
-      ) : (
+      )}
+
+      {!isOrgWide && (
+        <p className={styles.panelMeta}>Humans landing code in the latest merged queue</p>
+      )}
+
+      {/* ── Spotlight: top contributors ───────────────────────────────── */}
+      {spotlight.length > 0 && (
+        <>
+          <p className={styles.communitySpotlightLabel}>✦ Top Contributors</p>
+          <div className={styles.communitySpotlight}>
+            {spotlight.map(({ login, repos }) => {
+              const s = stats[login];
+              const lastWeek = s?.lastWeek ?? 0;
+              const lastMonth = s?.lastMonth ?? 0;
+              const badges = computeMilestones(repos.length, lastWeek, lastMonth);
+              const topBadge = badges[0];
+              return (
+                <Link
+                  key={login}
+                  href={`https://github.com/${login}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={styles.spotlightCard}
+                  title={repos.slice(0, 3).join(", ")}
+                >
+                  <img
+                    src={`https://github.com/${login}.png?size=64`}
+                    alt={login}
+                    className={styles.spotlightAvatar}
+                    loading="lazy"
+                  />
+                  <span className={styles.spotlightName}>{login}</span>
+                  <span className={styles.spotlightCommits}>
+                    {repos.length} {repos.length === 1 ? "project" : "projects"}
+                  </span>
+                  {repos.length > 0 && (
+                    <div className={styles.spotlightRepos}>
+                      {repos.slice(0, 2).map((r) => (
+                        <span key={r} className={styles.spotlightRepoChip}>{r}</span>
+                      ))}
+                    </div>
+                  )}
+                  {topBadge && (
+                    <span
+                      className={styles.spotlightBadge}
+                      style={{ borderColor: topBadge.color, color: topBadge.color }}
+                    >
+                      {topBadge.label}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {/* ── Full community grid ───────────────────────────────────────── */}
+      {rest.length > 0 && (
+        <>
+          <p className={styles.communitySpotlightLabel} style={{ marginTop: "1.5rem" }}>
+            Community
+          </p>
+          <div className={styles.contributorGrid}>
+            {visibleRest.map(({ login, repos }) => (
+              <Link
+                key={login}
+                href={`https://github.com/${login}`}
+                target="_blank"
+                rel="noreferrer"
+                className={styles.contributorCard}
+                title={repos.length > 0 ? `${login} · ${repos.slice(0, 3).join(", ")}` : login}
+              >
+                <img
+                  src={`https://github.com/${login}.png?size=40`}
+                  alt={login}
+                  className={styles.contributorAvatar}
+                  loading="lazy"
+                />
+                <span className={styles.contributorName}>{login}</span>
+                {repos.length > 0 && (
+                  <span className={styles.contributorCommits}>
+                    {repos.length}p
+                  </span>
+                )}
+              </Link>
+            ))}
+          </div>
+          {!showAll && rest.length > GRID_INITIAL && (
+            <button
+              className={styles.communityShowMore}
+              onClick={() => setShowAll(true)}
+            >
+              Show all {rest.length} contributors
+            </button>
+          )}
+        </>
+      )}
+
+      {orgContributors.length === 0 && (
         <div className={styles.empty}>Frames are running the show</div>
       )}
+
+      <p className={styles.panelMeta} style={{ marginTop: "1rem" }}>
+        <Link
+          href="https://github.com/orgs/projectbluefin/people"
+          target="_blank"
+          rel="noreferrer"
+        >
+          View all on GitHub →
+        </Link>
+      </p>
     </section>
   );
 }
@@ -1412,8 +1622,7 @@ type LeaderboardTab = "alltime" | "monthly" | "weekly";
 interface LeaderboardEntry {
   rank: number;
   login: string;
-  commits: number;
-  delta?: number;      // change vs previous window (weekly only)
+  projects: number;    // repos.length — breadth of engagement
   repos: string[];
   badges: MilestoneBadge[];
   hasStats: boolean;
@@ -1441,17 +1650,12 @@ function ContributorLeaderboard({ history }: { history: HiveHistory | null }) {
 
     for (const login of allLogins) {
       const s = stats[login];
-      const allTime = s?.total ?? allTimeMap[login] ?? 0;
       const lastWeek = s?.lastWeek ?? 0;
       const lastMonth = s?.lastMonth ?? 0;
-      const last3Months = s?.last3Months ?? 0;
 
-      let commits = 0;
-      if (tab === "alltime") commits = allTime;
-      else if (tab === "monthly") commits = lastMonth;
-      else commits = lastWeek;
-
-      if (commits === 0) continue;
+      // Filter by activity window (commits used only as an activity signal, not a metric)
+      if (tab === "weekly" && lastWeek === 0) continue;
+      if (tab === "monthly" && lastMonth === 0) continue;
 
       // Repos from stats.byRepo or contributorsByRepo
       const repoMap = s?.byRepo ?? {};
@@ -1469,28 +1673,20 @@ function ContributorLeaderboard({ history }: { history: HiveHistory | null }) {
         return mb - ma;
       });
 
-      // Delta: for weekly tab, this week vs weekly avg of last month
-      let delta: number | undefined;
-      if (tab === "weekly" && lastMonth > 0) {
-        const avg = lastMonth / 4;
-        delta = Math.round(lastWeek - avg);
-      } else if (tab === "monthly" && last3Months > 0) {
-        const avg = last3Months / 3;
-        delta = Math.round(lastMonth - avg);
-      }
+      if (repos.length === 0) continue;
 
       rows.push({
         rank: 0,
         login,
-        commits,
-        delta,
+        projects: repos.length,
         repos,
-        badges: computeMilestones(allTime, lastWeek, lastMonth, repos),
+        badges: computeMilestones(repos.length, lastWeek, lastMonth),
         hasStats: s != null,
       });
     }
 
-    rows.sort((a, b) => b.commits - a.commits);
+    // Sort by breadth (projects), tiebreak by recency
+    rows.sort((a, b) => b.projects - a.projects);
     rows.forEach((r, i) => { r.rank = i + 1; });
     return rows.slice(0, 25);
   }, [history, tab]);
@@ -1501,38 +1697,56 @@ function ContributorLeaderboard({ history }: { history: HiveHistory | null }) {
     ? new Date(history.lastWeeklyStatsFetch).toLocaleDateString("en-US", { month: "short", day: "numeric" })
     : null;
 
+  const activeTab = (tab === "monthly" || tab === "weekly") && !hasWeeklyStats
+    ? "alltime"
+    : tab;
+
   return (
     <section className={styles.panel}>
       <Heading as="h2" className={styles.panelTitle}>
-        Contributor Leaderboard
+        Community Builders
       </Heading>
       <p className={styles.panelMeta}>
-        Factory-wide commit rankings across all 15 repos
+        Ranked by breadth of engagement — projects contributed to across the factory
         {lastUpdated ? ` · stats as of ${lastUpdated}` : ""}
-        {!hasWeeklyStats ? " · weekly/monthly windows accumulating" : ""}
+        {!hasWeeklyStats && (
+          <span className={styles.lbAccumulating}>
+            {" "}· Activity windows accumulating — check back soon
+          </span>
+        )}
       </p>
 
       <div className={styles.lbTabs}>
         {(["alltime", "monthly", "weekly"] as LeaderboardTab[]).map((t) => (
           <button
             key={t}
-            className={`${styles.lbTab} ${tab === t ? styles.lbTabActive : ""}`}
+            className={`${styles.lbTab} ${tab === t ? styles.lbTabActive : ""} ${!hasWeeklyStats && t !== "alltime" ? styles.lbTabDisabled : ""}`}
             onClick={() => setTab(t)}
+            title={!hasWeeklyStats && t !== "alltime" ? "Activity data accumulating" : undefined}
           >
-            {t === "alltime" ? "All Time" : t === "monthly" ? "This Month" : "This Week"}
+            {t === "alltime" ? "All Time" : t === "monthly" ? "Active Month" : "Active Week"}
+            {!hasWeeklyStats && t !== "alltime" && (
+              <span className={styles.lbTabPending}> ○</span>
+            )}
           </button>
         ))}
       </div>
+
+      {!hasWeeklyStats && activeTab === "alltime" && (tab === "monthly" || tab === "weekly") && (
+        <p className={styles.lbFallbackNote}>
+          Showing all-time contributors — activity windows are still accumulating.
+        </p>
+      )}
 
       <div className={styles.lbTable}>
         <div className={styles.lbHeader}>
           <span className={styles.lbColRank}>#</span>
           <span className={styles.lbColUser}>Contributor</span>
-          <span className={styles.lbColCommits}>Commits</span>
+          <span className={styles.lbColCommits}>Projects</span>
           <span className={styles.lbColRepos}>Repos</span>
           <span className={styles.lbColBadges}>Milestones</span>
         </div>
-        {ranked.map(({ rank, login, commits, delta, repos, badges }) => (
+        {ranked.map(({ rank, login, projects, repos, badges }) => (
           <Link
             key={login}
             href={`https://github.com/${login}`}
@@ -1553,14 +1767,7 @@ function ContributorLeaderboard({ history }: { history: HiveHistory | null }) {
               <span className={styles.lbLogin}>{login}</span>
             </span>
             <span className={styles.lbColCommits}>
-              <span className={styles.lbCommitCount}>
-                {commits >= 1000 ? `${(commits / 1000).toFixed(1)}k` : commits}
-              </span>
-              {delta != null && delta !== 0 && (
-                <span className={`${styles.lbDelta} ${delta > 0 ? styles.lbDeltaUp : styles.lbDeltaDown}`}>
-                  {delta > 0 ? `+${delta}` : delta}
-                </span>
-              )}
+              <span className={styles.lbCommitCount}>{projects}</span>
             </span>
             <span className={styles.lbColRepos}>
               {repos.slice(0, 3).map((r) => (
@@ -1664,67 +1871,132 @@ function VelocityPanel({
   );
 }
 
-function GovernorPanel({ governor }: { governor?: HiveGovernor }) {
-  const mode = (governor?.mode ?? "idle").toUpperCase();
-  const issues = governor?.issues ?? 0;
-  const prs = governor?.prs ?? 0;
+function GovernorPanel({ governor, registry }: { governor?: HiveGovernor; registry?: RegistryEntry | null }) {
+  // Use registry data as fallback when full snapshot governor isn't available
+  const rawMode = governor?.mode ?? registry?.governorMode ?? "idle";
+  const mode = rawMode.toUpperCase();
+
+  // Queue depth: prefer full governor data, fall back to registry actionable counts
+  const issues = governor?.issues ?? registry?.actionableIssues ?? 0;
+  const prs = governor?.prs ?? registry?.actionablePRs ?? 0;
   const depth = issues + prs;
-  const quiet = governor?.thresholds?.quiet ?? 0;
-  const busy = governor?.thresholds?.busy ?? Math.max(quiet + 1, depth, 1);
-  const surge = governor?.thresholds?.surge ?? Math.max(busy + 1, depth, 1);
+
+  // Thresholds: use snapshot values if present, otherwise derive from registry mode + current depth
+  const hasRealThresholds = governor?.thresholds?.quiet != null;
+  const quiet = governor?.thresholds?.quiet ?? 20;
+  const busy  = governor?.thresholds?.busy  ?? 50;
+  const surge = governor?.thresholds?.surge ?? Math.max(busy + 1, depth + 1, 80);
   const maxDepth = Math.max(surge, depth, 1);
-  const quietWidth = Math.max((quiet / maxDepth) * 100, 18);
-  const busyWidth = Math.max(((busy - quiet) / maxDepth) * 100, 18);
-  const surgeWidth = Math.max(100 - quietWidth - busyWidth, 18);
-  const markerLeft = Math.min((depth / maxDepth) * 100, 100);
+
+  const quietPct = (quiet / maxDepth) * 100;
+  const busyPct  = ((busy - quiet) / maxDepth) * 100;
+  const surgePct = 100 - quietPct - busyPct;
+
+  let markerLeft: number;
+  if (depth <= quiet) {
+    markerLeft = quiet > 0 ? (depth / quiet) * quietPct : 0;
+  } else if (depth <= busy) {
+    markerLeft = quietPct + ((depth - quiet) / Math.max(busy - quiet, 1)) * busyPct;
+  } else {
+    markerLeft = quietPct + busyPct + ((depth - busy) / Math.max(maxDepth - busy, 1)) * surgePct;
+  }
+  markerLeft = Math.min(markerLeft, 99.5);
+
+  const modeColor =
+    { surge: "#f85149", busy: "#d97706", quiet: "#58a6ff", idle: "#8b949e" }[
+      rawMode.toLowerCase()
+    ] ?? "#8b949e";
+
+  // Issue history sparkline from registry
+  const issueHistory = registry?.issueHistory ?? [];
+  const sparkVals = issueHistory.slice(-48).map((e) => e.v);
+  const sparkMax = Math.max(...sparkVals, 1);
+
+  const hasData = governor != null || registry != null;
 
   return (
     <section className={styles.panel}>
       <Heading as="h2" className={styles.panelTitle}>
         Governor
       </Heading>
-      <div className={`${styles.govMode} ${governorModeClass(governor?.mode)}`}>
+      <div className={`${styles.govMode} ${governorModeClass(rawMode)}`}>
         {mode}
       </div>
       <div className={styles.kv}>
         <span>Queue depth</span>
         <strong>
-          {issues} issues + {prs} PRs in queue
+          {issues} issues + {prs} PRs &mdash; {depth} total
+          {!hasRealThresholds && registry && (
+            <span style={{ color: "#484f58", fontWeight: 400, fontSize: "0.7rem" }}> (registry)</span>
+          )}
         </strong>
       </div>
-      <div className={styles.govThreshBar}>
+      <div className={styles.govThreshOuter}>
         <div
-          className={styles.govThreshZoneQuiet}
-          style={{ width: `${quietWidth}%` }}
+          className={styles.govThreshMarkerLabel}
+          style={{ left: `${markerLeft}%`, color: modeColor }}
+          aria-hidden="true"
         >
-          QUIET
+          {depth}
         </div>
-        <div
-          className={styles.govThreshZoneBusy}
-          style={{ width: `${busyWidth}%` }}
-        >
-          BUSY
+        <div className={styles.govThreshBar}>
+          <div className={styles.govThreshZoneQuiet} style={{ width: `${quietPct}%` }}>
+            {quietPct >= 10 ? "QUIET" : ""}
+          </div>
+          <div className={styles.govThreshZoneBusy} style={{ width: `${busyPct}%` }}>
+            {busyPct >= 10 ? "BUSY" : ""}
+          </div>
+          <div className={styles.govThreshZoneSurge} style={{ width: `${surgePct}%` }}>
+            {surgePct >= 10 ? "SURGE" : ""}
+          </div>
+          <span className={styles.govThreshMarker} style={{ left: `${markerLeft}%`, background: modeColor }} />
         </div>
-        <div
-          className={styles.govThreshZoneSurge}
-          style={{ width: `${surgeWidth}%` }}
-        >
-          SURGE
-        </div>
-        <span
-          className={styles.govThreshMarker}
-          style={{ left: `calc(${markerLeft}% - 1px)` }}
-        />
       </div>
       <div className={styles.govThreshLegend}>
         <span>Q &le; {quiet}</span>
         <span>B &le; {busy}</span>
         <span>S &ge; {surge}</span>
+        <span style={{ marginLeft: "auto", color: modeColor, fontWeight: 700 }}>
+          current: {depth}
+        </span>
       </div>
       <p className={styles.panelMeta}>
-        Next kick: {" "}
+        Next kick:{" "}
         {governor?.nextKick ? relTime(governor.nextKick) : "—"}
+        {registry?.lastHeartbeat && (
+          <> &middot; heartbeat {relTime(registry.lastHeartbeat)}</>
+        )}
       </p>
+
+      {/* Issue queue history sparkline */}
+      {sparkVals.length > 4 && (
+        <div style={{ marginTop: "0.75rem" }}>
+          <div style={{ fontSize: "0.65rem", color: "#484f58", marginBottom: "3px", fontFamily: "monospace", letterSpacing: "0.04em" }}>
+            ISSUE QUEUE — LAST {sparkVals.length} READINGS
+          </div>
+          <svg viewBox={`0 0 ${sparkVals.length * 4} 32`} style={{ width: "100%", height: "32px", display: "block" }} aria-hidden="true">
+            {(() => {
+              const W = sparkVals.length * 4; const H = 32;
+              const pts = sparkVals.map((v, i) => {
+                const x = (i / (sparkVals.length - 1)) * W;
+                const y = H - 2 - (v / sparkMax) * (H - 6);
+                return `${x},${y}`;
+              });
+              const area = `M 0,${H} L ${pts[0]} L ${pts.slice(1).join(" L ")} L ${W},${H} Z`;
+              return (
+                <>
+                  <path d={area} fill={`${modeColor}22`} />
+                  <polyline points={pts.join(" ")} fill="none" stroke={modeColor} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+                </>
+              );
+            })()}
+          </svg>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.6rem", color: "#484f58", fontFamily: "monospace" }}>
+            <span>{sparkVals[0]}</span>
+            <span style={{ color: modeColor }}>{sparkVals[sparkVals.length - 1]} now</span>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -1797,7 +2069,7 @@ function FrameOfDay({ agent, advisoryItems: agentAdvisories }: { agent: HiveAgen
       </Heading>
       <div className={styles.agentOfDayHero}>
         <div className={styles.agentHeroInitial}>
-          {(agent.displayName || agent.name).slice(0, 1).toUpperCase()}
+          {(agent.displayName || agent.name || "?").slice(0, 1).toUpperCase()}
         </div>
         <div>
           <div className={styles.agentOfDayLabel}>
@@ -1923,8 +2195,8 @@ function AgentWorkLog({
   return (
     <div className={styles.workLog}>
       {agents.map((agent) => {
-        const agentItems = byAgent[agent.name] ?? [];
-        const isExpandedAgent = expanded === agent.name;
+        const agentItems = byAgent[agent.name ?? agent.id] ?? [];
+        const isExpandedAgent = expanded === (agent.name ?? agent.id);
         const visible = isExpandedAgent ? agentItems : agentItems.slice(0, 3);
         const repos = [
           ...new Set(
@@ -1990,7 +2262,7 @@ function AgentWorkLog({
                   <button
                     className={styles.workLogToggle}
                     onClick={() =>
-                      setExpanded(isExpandedAgent ? null : agent.name)
+                      setExpanded(isExpandedAgent ? null : (agent.name ?? agent.id))
                     }
                   >
                     {isExpandedAgent
@@ -2102,77 +2374,104 @@ function OrgStatsPanel({ stats }: { stats: OrgStats }) {
 
 // ── New: Guardians column ──────────────────────────────────────────────────
 
-function GuardiansColumn({ prs }: { prs: QueueData["prs"] | null }) {
-  if (!prs) {
+// ── Guardians column — Community discussions ───────────────────────────────
+
+const EPIC_LABELS = new Set(["epic", "type:epic", "kind:epic", "feature:epic"]);
+const SKIP_LABEL_PREFIXES_GUARDIAN = ["queue/", "hive/", "source:", "priority/", "type:epic", "kind:epic"];
+
+function guardianVisibleLabels(labels?: QueueLabel[]): QueueLabel[] {
+  return (labels ?? []).filter(
+    (l) =>
+      !SKIP_LABEL_PREFIXES_GUARDIAN.some((p) => l.name.toLowerCase().startsWith(p)) &&
+      !EPIC_LABELS.has(l.name.toLowerCase()),
+  ).slice(0, 3);
+}
+
+function isEpic(labels?: QueueLabel[]): boolean {
+  return (labels ?? []).some((l) => EPIC_LABELS.has(l.name.toLowerCase()));
+}
+
+function GuardiansColumn({ discussions }: { discussions: CommunityDiscussion[] | null }) {
+  if (!discussions) {
     return (
       <div className={`${styles.destinyCol} ${styles.guardiansCol}`}>
         <div>
           <p className={styles.destinyColTitle + " " + styles.guardiansColTitle}>Guardians</p>
-          <p className={styles.destinyColSubtitle}>Human contributor pull requests</p>
+          <p className={styles.destinyColSubtitle}>Community conversations</p>
         </div>
         <div className={styles.empty}>Loading…</div>
       </div>
     );
   }
 
-  const tiers: Array<{
-    key: keyof QueueData["prs"];
-    label: string;
-    labelCls: string;
-    items: QueuePR[];
-  }> = [
-    { key: "approved", label: "APPROVED", labelCls: styles.prTierLabelApproved, items: prs.approved },
-    { key: "required", label: "NEEDS REVIEW", labelCls: styles.prTierLabelRequired, items: prs.required },
-    { key: "none", label: "NO REVIEWS", labelCls: styles.prTierLabelNone, items: prs.none },
+  const epics = discussions.filter((d) => isEpic(d.labels));
+  const active = discussions.filter((d) => !isEpic(d.labels));
+
+  function DiscussionCard({ item }: { item: CommunityDiscussion }) {
+    const repo = parseRepoName(item.repository_url, item.html_url);
+    const lbls = guardianVisibleLabels(item.labels);
+    return (
+      <Link
+        href={item.html_url}
+        target="_blank"
+        rel="noreferrer"
+        className={styles.issueCard}
+      >
+        <span className={styles.issueCardTitle}>{item.title.slice(0, 90)}</span>
+        <div className={styles.issueCardMeta}>
+          <span className={styles.issueCardRepo}>{repo}</span>
+          {(item.comments ?? 0) > 0 && (
+            <span className={styles.commentCount}>
+              {item.comments} comment{item.comments !== 1 ? "s" : ""}
+            </span>
+          )}
+          {lbls.map((l) => (
+            <span
+              key={l.name}
+              className={styles.issueLabel}
+              style={{
+                background: `#${l.color}22`,
+                color: `#${l.color}`,
+                border: `1px solid #${l.color}44`,
+              }}
+            >
+              {l.name}
+            </span>
+          ))}
+          <span className={styles.issueCardAge}>{relTime(item.updated_at)}</span>
+        </div>
+      </Link>
+    );
+  }
+
+  const tiers: Array<{ label: string; labelCls: string; items: CommunityDiscussion[]; empty: string }> = [
+    { label: "EPICS", labelCls: styles.prTierLabelEpic, items: epics, empty: "No open epics" },
+    { label: "ACTIVE DISCUSSIONS", labelCls: styles.prTierLabelNone, items: active, empty: "Queue clear" },
   ];
 
   return (
     <div className={`${styles.destinyCol} ${styles.guardiansCol}`}>
       <div>
         <p className={styles.destinyColTitle + " " + styles.guardiansColTitle}>Guardians</p>
-        <p className={styles.destinyColSubtitle}>Human contributor pull requests — the Light we carry</p>
+        <p className={styles.destinyColSubtitle}>
+          Community conversations &mdash; sorted by latest activity
+        </p>
       </div>
-      {tiers.map(({ key, label, labelCls, items }) => (
-        <div key={key} className={styles.prTier}>
+      {tiers.map(({ label, labelCls, items, empty }) => (
+        <div key={label} className={styles.prTier}>
           <div className={styles.prTierHeader}>
             <span className={`${styles.prTierLabel} ${labelCls}`}>{label}</span>
             <span className={styles.prTierCount}>{items.length}</span>
           </div>
           {items.length === 0 ? (
-            <div className={styles.prTierEmpty}>None</div>
+            <div className={styles.prTierEmpty}>{empty}</div>
           ) : (
-            items.slice(0, 8).map((pr, i) => {
-              const repo = parseRepoName(pr.repository_url);
-              const approvals = pr._reviews?.approved ?? 0;
-              return (
-                <Link
-                  key={i}
-                  href={pr.html_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={styles.prCard}
-                >
-                  <span className={styles.prCardTitle}>
-                    {pr.title.slice(0, 80)}
-                  </span>
-                  <div className={styles.prCardMeta}>
-                    <span className={styles.prCardRepo}>{repo}</span>
-                    {approvals > 0 && (
-                      <span className={styles.prCardApprovals}>
-                        {approvals} approved
-                      </span>
-                    )}
-                    <span className={styles.prCardAge}>{relTime(pr.updated_at)}</span>
-                  </div>
-                </Link>
-              );
-            })
+            items.slice(0, 10).map((item) => (
+              <DiscussionCard key={item.html_url} item={item} />
+            ))
           )}
-          {items.length > 8 && (
-            <div className={styles.prTierEmpty}>
-              +{items.length - 8} more &mdash; {" "}
-              <Link href="https://queue.projectbluefin.io/">see all</Link>
-            </div>
+          {items.length > 10 && (
+            <div className={styles.prTierEmpty}>+{items.length - 10} more</div>
           )}
         </div>
       ))}
@@ -2180,98 +2479,117 @@ function GuardiansColumn({ prs }: { prs: QueueData["prs"] | null }) {
   );
 }
 
-// ── New: Ghosts column ─────────────────────────────────────────────────────
+// ── Ghosts column — Agent-assisted PRs ────────────────────────────────────
 
-function GhostsColumn({ issues }: { issues: QueueData["issues"] | null }) {
-  if (!issues) {
+const SKIP_LABEL_PREFIXES_GHOST = ["source:", "hive/", "queue/", "priority/"];
+
+function ghostVisibleLabels(labels?: QueueLabel[]): QueueLabel[] {
+  return (labels ?? []).filter(
+    (l) => !SKIP_LABEL_PREFIXES_GHOST.some((p) => l.name.toLowerCase().startsWith(p)),
+  ).slice(0, 3);
+}
+
+function GhostsColumn({
+  hivePRs,
+  copilotPRs,
+}: {
+  hivePRs: AgentAssistedPR[] | null;
+  copilotPRs: AgentAssistedPR[] | null;
+}) {
+  const loading = hivePRs === null && copilotPRs === null;
+
+  if (loading) {
     return (
       <div className={`${styles.destinyCol} ${styles.ghostsCol}`}>
         <div>
           <p className={styles.destinyColTitle + " " + styles.ghostsColTitle}>Ghosts</p>
-          <p className={styles.destinyColSubtitle}>Agent-driven issues and work queue</p>
+          <p className={styles.destinyColSubtitle}>Agent-assisted pull requests</p>
         </div>
         <div className={styles.empty}>Loading…</div>
       </div>
     );
   }
 
-  const SKIP_LABEL_PREFIXES = ["hive/", "priority/", "queue/"];
-
-  function visibleLabels(labels?: QueueLabel[]): QueueLabel[] {
-    return (labels ?? []).filter(
-      (l) => !SKIP_LABEL_PREFIXES.some((p) => l.name.startsWith(p)),
+  // Merge + deduplicate by html_url; hive entries win on conflict
+  const allPRs = React.useMemo(() => {
+    const seen = new Set<string>();
+    const merged: AgentAssistedPR[] = [];
+    for (const pr of hivePRs ?? []) {
+      if (!seen.has(pr.html_url)) { seen.add(pr.html_url); merged.push(pr); }
+    }
+    for (const pr of copilotPRs ?? []) {
+      if (!seen.has(pr.html_url)) { seen.add(pr.html_url); merged.push(pr); }
+    }
+    return merged.sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
     );
-  }
-
-  const tiers: Array<{
-    key: keyof QueueData["issues"];
-    label: string;
-    labelCls: string;
-    items: QueueIssue[];
-  }> = [
-    { key: "p0", label: "P0", labelCls: styles.issueTierLabelP0, items: issues.p0 },
-    { key: "p1", label: "P1", labelCls: styles.issueTierLabelP1, items: issues.p1 },
-  ];
+  }, [hivePRs, copilotPRs]);
 
   return (
     <div className={`${styles.destinyCol} ${styles.ghostsCol}`}>
       <div>
         <p className={styles.destinyColTitle + " " + styles.ghostsColTitle}>Ghosts</p>
-        <p className={styles.destinyColSubtitle}>Agent-driven issues — the machines at work</p>
+        <p className={styles.destinyColSubtitle}>
+          Agent-assisted pull requests &mdash; the machines at work
+        </p>
       </div>
-      {tiers.map(({ key, label, labelCls, items }) => (
-        <div key={key} className={styles.prTier}>
-          <div className={styles.prTierHeader}>
-            <span className={`${styles.prTierLabel} ${labelCls}`}>{label}</span>
-            <span className={styles.prTierCount}>{items.length}</span>
-          </div>
-          {items.length === 0 ? (
-            <div className={styles.prTierEmpty}>
-              {key === "p0" ? "No blockers" : "Queue clear"}
-            </div>
-          ) : (
-            items.slice(0, 8).map((issue, i) => {
-              const repo = parseRepoName(issue.repository_url);
-              const lbls = visibleLabels(issue.labels).slice(0, 3);
-              return (
-                <Link
-                  key={i}
-                  href={issue.html_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={styles.issueCard}
-                >
-                  <span className={styles.issueCardTitle}>
-                    {issue.title.slice(0, 80)}
-                  </span>
-                  <div className={styles.issueCardMeta}>
-                    <span className={styles.issueCardRepo}>{repo}</span>
-                    {lbls.map((l) => (
-                      <span
-                        key={l.name}
-                        className={styles.issueLabel}
-                        style={{
-                          background: `#${l.color}22`,
-                          color: `#${l.color}`,
-                          border: `1px solid #${l.color}44`,
-                        }}
-                      >
-                        {l.name}
-                      </span>
-                    ))}
-                    <span className={styles.issueCardAge}>
-                      {relTime(issue.updated_at)}
-                    </span>
-                  </div>
-                </Link>
-              );
-            })
-          )}
-          {items.length > 8 && (
-            <div className={styles.prTierEmpty}>+{items.length - 8} more</div>
-          )}
+      <div className={styles.prTier}>
+        <div className={styles.prTierHeader}>
+          <span className={`${styles.prTierLabel} ${styles.prTierLabelAgent}`}>OPEN</span>
+          <span className={styles.prTierCount}>{allPRs.length}</span>
         </div>
-      ))}
+        {allPRs.length === 0 ? (
+          <div className={styles.prTierEmpty}>No open agent PRs</div>
+        ) : (
+          allPRs.slice(0, 15).map((pr) => {
+            const repo = parseRepoName(pr.repository_url, pr.html_url);
+            const lbls = ghostVisibleLabels(pr.labels);
+            return (
+              <Link
+                key={pr.html_url}
+                href={pr.html_url}
+                target="_blank"
+                rel="noreferrer"
+                className={styles.prCard}
+              >
+                <span className={styles.prCardTitle}>
+                  {pr.draft && <span className={styles.prDraftBadge}>Draft</span>}
+                  {pr.title.slice(0, 85)}
+                </span>
+                <div className={styles.prCardMeta}>
+                  <span className={styles.prCardRepo}>{repo}</span>
+                  <span
+                    className={
+                      pr.agentType === "hive"
+                        ? styles.agentTypeBadgeHive
+                        : styles.agentTypeBadgeCopilot
+                    }
+                  >
+                    {pr.agentType === "hive" ? "hive" : "copilot"}
+                  </span>
+                  {lbls.map((l) => (
+                    <span
+                      key={l.name}
+                      className={styles.issueLabel}
+                      style={{
+                        background: `#${l.color}22`,
+                        color: `#${l.color}`,
+                        border: `1px solid #${l.color}44`,
+                      }}
+                    >
+                      {l.name}
+                    </span>
+                  ))}
+                  <span className={styles.prCardAge}>{relTime(pr.updated_at)}</span>
+                </div>
+              </Link>
+            );
+          })
+        )}
+        {allPRs.length > 15 && (
+          <div className={styles.prTierEmpty}>+{allPRs.length - 15} more</div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2362,64 +2680,55 @@ export default function HiveFactoryDashboard(): React.JSX.Element {
   const [dakotaStats, setDakotaStats] = useState<DakotaStats | null>(null);
   const [queue, setQueue] = useState<QueueStats | null>(null);
   const [queueData, setQueueData] = useState<QueueData | null>(null);
-  const [commits, setCommits] = useState<number[]>([]);
   const [orgStats, setOrgStats] = useState<OrgStats | null>(null);
-  const [repoPRs, setRepoPRs] = useState<RepoPRs[]>([]);
+  const [registryData, setRegistryData] = useState<RegistryEntry | null>(null);
   const [mergedPRs, setMergedPRs] = useState<MergedPR[]>([]);
   const [velocity, setVelocity] = useState<Velocity | null>(null);
   const [hiveHistory, setHiveHistory] = useState<HiveHistory | null>(null);
+  const [testBuilds, setTestBuilds] = useState<number | null>(null);
+  const [tapPromotions, setTapPromotions] = useState<number | null>(null);
+  const [agentMergedCount, setAgentMergedCount] = useState<number | null>(null);
+  const [communityDiscussions, setCommunityDiscussions] = useState<CommunityDiscussion[] | null>(null);
+  const [hivePRsList, setHivePRsList] = useState<AgentAssistedPR[] | null>(null);
+  const [copilotPRsList, setCopilotPRsList] = useState<AgentAssistedPR[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [refreshIn, setRefreshIn] = useState(REFRESH_SECS);
 
   const fetchAll = useCallback(async () => {
     try {
-      const weekAgoISO = new Date(Date.now() - 7 * 24 * 3600 * 1000)
-        .toISOString()
-        .slice(0, 10);
-
+      // Only fetch live/private data that can't be baked at build time:
+      // snapshot (auth-gated), queue (public, changes every 10m), dakota CI (REST not search)
+      // All GitHub Search API calls are in hive-live-data.json (build-time, authenticated).
       const [
         htmlRes,
         queueRes,
         repoRes,
         ciRes,
-        commitsRes,
-        mergedRes,
-        openedRes,
-        closedRes,
       ] = await Promise.allSettled([
-        fetchTimeout(SNAPSHOT_HTML_URL),
-        fetchTimeout(QUEUE_URL),
+        fetchTimeout(SNAPSHOT_API_URL, 12000, { credentials: "include" }),
+        fetchQueueData(),
         fetchTimeout(`${GH_API}/repos/${DAKOTA}`),
         fetchTimeout(
           `${GH_API}/repos/${DAKOTA}/actions/workflows/${BUILD_WORKFLOW}/runs?per_page=1&status=completed`,
         ),
-        fetchTimeout(`${GH_API}/repos/${DAKOTA}/stats/participation`),
-        fetchTimeout(
-          `${GH_API}/search/issues?q=org:projectbluefin+type:pr+is:merged&sort=updated&per_page=30`,
-        ),
-        fetchTimeout(
-          `${GH_API}/search/issues?q=org:projectbluefin+type:issue+created:>${weekAgoISO}&per_page=1`,
-        ),
-        fetchTimeout(
-          `${GH_API}/search/issues?q=org:projectbluefin+type:issue+closed:>${weekAgoISO}&per_page=1`,
-        ),
       ]);
 
-      // Hive snapshot from embedded HTML
+      // Hive snapshot — /api/status returns JSON directly (same shape as old render() payload)
       if (htmlRes.status === "fulfilled" && htmlRes.value.ok) {
-        const html = await htmlRes.value.text();
-        const data = await extractRenderJson(html);
-        if (data) {
+        try {
+          const data = (await htmlRes.value.json()) as Record<string, unknown>;
           const { snapshot: snap, config: cfg } = parseSnapshotJson(data);
           if (snap) setSnapshot(snap);
           if (cfg) setConfig(cfg);
+        } catch {
+          /* non-fatal — snapshot unavailable when not logged in */
         }
       }
 
-      // Queue data
-      if (queueRes.status === "fulfilled" && queueRes.value.ok) {
-        const qd = (await queueRes.value.json()) as QueueData;
+      // Queue data (hosted instance → public fallback)
+      if (queueRes.status === "fulfilled" && queueRes.value != null) {
+        const qd = queueRes.value;
         setQueueData(qd);
         // Derive legacy queue stats for QueueBar
         const p0Count = qd.issues.p0.length;
@@ -2429,12 +2738,7 @@ export default function HiveFactoryDashboard(): React.JSX.Element {
         setQueue({ ready: agentReady, claimed: 0, p0: p0Count });
       }
 
-      setMergedPRs(await parseMergedPRs(mergedRes));
-      const opened = await parseSearchCount(openedRes);
-      const closed = await parseSearchCount(closedRes);
-      setVelocity({ opened, closed });
-
-      // Repo stats + CI
+      // Repo stats + CI — uses REST API (not search), generous rate limit
       if (repoRes.status === "fulfilled" && repoRes.value.ok) {
         const repo = (await repoRes.value.json()) as {
           stargazers_count: number;
@@ -2456,112 +2760,14 @@ export default function HiveFactoryDashboard(): React.JSX.Element {
                   : "pending";
           }
         }
-        let openPRs = 0;
-        try {
-          const prRes = await fetchTimeout(
-            `${GH_API}/search/issues?q=repo:${DAKOTA}+type:pr+state:open`,
-          );
-          if (prRes.ok) {
-            const prData =
-              (await prRes.json()) as GitHubSearchResponse<unknown>;
-            openPRs = prData.total_count ?? 0;
-          }
-        } catch {
-          /* non-fatal */
-        }
         setDakotaStats({
           stars: repo.stargazers_count,
           forks: repo.forks_count,
           openIssues: repo.open_issues_count,
-          openPRs,
+          openPRs: 0,
           ciStatus,
         });
       }
-
-      // Commit sparkline
-      if (commitsRes.status === "fulfilled" && commitsRes.value.ok) {
-        const commitData =
-          (await commitsRes.value.json()) as { all?: number[] };
-        if (Array.isArray(commitData.all))
-          setCommits(commitData.all.slice(-12));
-      }
-
-      // Org-wide stats
-      try {
-        const weekAgo = new Date(Date.now() - 7 * 86400000)
-          .toISOString()
-          .slice(0, 10);
-        const orgQueries: [string, string][] = [
-          ["openIssues", `org:projectbluefin+state:open+type:issue`],
-          ["openPRs", `org:projectbluefin+state:open+type:pr`],
-          ["mergedThisWeek", `org:projectbluefin+type:pr+merged:>${weekAgo}`],
-          ["agentReadyIssues", `org:projectbluefin+label:queue%2Fagent-ready+state:open`],
-          ["agentOpenPRs", `org:projectbluefin+author:kubestellar-hive%5Bbot%5D+state:open+type:pr`],
-          ["sourceAgentOpen", `org:projectbluefin+label:source%3Aagent+state:open`],
-        ];
-        const orgRepoRes = await fetchTimeout(`${GH_API}/orgs/projectbluefin`);
-        const orgRepo = orgRepoRes.ok ? ((await orgRepoRes.json()) as { public_repos?: number }) : {};
-        const counts: Record<string, number> = {};
-        for (const [key, q] of orgQueries) {
-          try {
-            const res = await fetchTimeout(
-              `${GH_API}/search/issues?q=${q}&per_page=1`,
-            );
-            if (res.ok) {
-              const d = (await res.json()) as GitHubSearchResponse<unknown>;
-              counts[key] = d.total_count ?? 0;
-            } else {
-              counts[key] = 0;
-            }
-          } catch {
-            counts[key] = 0;
-          }
-        }
-        setOrgStats({
-          totalRepos: orgRepo.public_repos ?? 0,
-          openIssues: counts.openIssues ?? 0,
-          openPRs: counts.openPRs ?? 0,
-          mergedThisWeek: counts.mergedThisWeek ?? 0,
-          agentReadyIssues: counts.agentReadyIssues ?? 0,
-          agentOpenPRs: counts.agentOpenPRs ?? 0,
-          sourceAgentOpen: counts.sourceAgentOpen ?? 0,
-        });
-      } catch {
-        /* non-fatal */
-      }
-
-      // Per-repo PR breakdown
-      const HIVE_REPOS = [
-        "knuckle",
-        "documentation",
-        "testsuite",
-        "dakota",
-        "dakota-iso",
-      ];
-      const HIVE_BOT = "kubestellar-hive[bot]";
-      const prResults = await Promise.allSettled(
-        HIVE_REPOS.map((r) =>
-          fetchTimeout(
-            `${GH_API}/repos/projectbluefin/${r}/pulls?state=open&per_page=100`,
-          ),
-        ),
-      );
-      const rPRs: RepoPRs[] = [];
-      for (let i = 0; i < HIVE_REPOS.length; i++) {
-        const res = prResults[i];
-        if (res.status === "fulfilled" && res.value.ok) {
-          const prs = (await res.value.json()) as Array<{
-            user: { login: string };
-          }>;
-          rPRs.push({
-            repo: HIVE_REPOS[i],
-            total: prs.length,
-            agentPRs: prs.filter((p) => p.user.login === HIVE_BOT).length,
-            label: HIVE_REPOS[i],
-          });
-        }
-      }
-      setRepoPRs(rPRs);
     } finally {
       setLoading(false);
       setLastUpdated(new Date());
@@ -2575,6 +2781,78 @@ export default function HiveFactoryDashboard(): React.JSX.Element {
       .then((r) => r.ok ? r.json() as Promise<HiveHistory> : null)
       .then((data) => { if (data) setHiveHistory(data); })
       .catch(() => {/* non-fatal */});
+  }, []);
+
+  // Fetch registry data (baked at build time — avoids CORS block on live API)
+  useEffect(() => {
+    fetch("/data/registry-data.json")
+      .then((r) => r.ok ? r.json() as Promise<RegistryEntry | null> : null)
+      .then((data) => { if (data) setRegistryData(data); })
+      .catch(() => {/* non-fatal */});
+  }, []);
+
+  // Fetch hive live data (GitHub Search API data baked at build time using GITHUB_TOKEN)
+  useEffect(() => {
+    fetch("/data/hive-live-data.json")
+      .then((r) => r.ok ? r.json() as Promise<HiveLiveData> : null)
+      .then((data) => {
+        if (!data) return;
+        setMergedPRs(
+          (data.mergedPRs ?? []).map((i) => ({
+            number: i.number,
+            title: i.title,
+            repo: parseRepoName(i.repository_url ?? ""),
+            author: i.user?.login ?? "unknown",
+            isBot: isBotLogin(i.user?.login ?? ""),
+            updatedAt: i.updated_at,
+            url: i.html_url,
+          })),
+        );
+        setCommunityDiscussions(
+          (data.discussions ?? []).map((i) => ({
+            number: i.number,
+            title: i.title,
+            html_url: i.html_url,
+            repository_url: i.repository_url,
+            updated_at: i.updated_at,
+            labels: i.labels,
+            comments: i.comments,
+            user: i.user ? { login: i.user.login } : undefined,
+          })),
+        );
+        setHivePRsList(
+          (data.hivePRs ?? []).map((i) => ({
+            number: i.number,
+            title: i.title,
+            html_url: i.html_url,
+            repository_url: i.repository_url,
+            updated_at: i.updated_at,
+            labels: i.labels,
+            user: i.user ? { login: i.user.login } : undefined,
+            draft: i.draft,
+            agentType: "hive" as const,
+          })),
+        );
+        setCopilotPRsList(
+          (data.copilotPRs ?? []).map((i) => ({
+            number: i.number,
+            title: i.title,
+            html_url: i.html_url,
+            repository_url: i.repository_url,
+            updated_at: i.updated_at,
+            labels: i.labels,
+            user: i.user ? { login: i.user.login } : undefined,
+            draft: i.draft,
+            agentType: "copilot" as const,
+          })),
+        );
+        if (data.velocity) setVelocity(data.velocity);
+        if (data.testBuilds != null) setTestBuilds(data.testBuilds);
+        if (data.tapPromotions != null) setTapPromotions(data.tapPromotions);
+        if (data.agentMergedCount != null) setAgentMergedCount(data.agentMergedCount);
+        if (data.orgStats) setOrgStats(data.orgStats);
+      })
+      .catch(() => {/* non-fatal — dashboard degrades gracefully */});
   }, []);
 
   useEffect(() => {
@@ -2602,7 +2880,7 @@ export default function HiveFactoryDashboard(): React.JSX.Element {
     agents.find(
       (a) =>
         a.role?.toLowerCase().includes("supervisor") ||
-        a.name.toLowerCase().includes("supervisor"),
+        (a.name ?? "").toLowerCase().includes("supervisor"),
     ) ?? null;
 
   const advisoriesByAgent = React.useMemo(() => {
@@ -2624,7 +2902,6 @@ export default function HiveFactoryDashboard(): React.JSX.Element {
     formationColor = "#d29922";
   }
 
-  const totalCommits = commits.reduce((a, b) => a + b, 0);
   const p0Count = queueData?.issues.p0.length ?? 0;
   const p1Count = queueData?.issues.p1.length ?? 0;
   const prsNeedingReview =
@@ -2694,286 +2971,246 @@ export default function HiveFactoryDashboard(): React.JSX.Element {
           </div>
           <div className={styles.heroRight}>
             <LivePulse />
-            {commits.length > 1 && (
-              <div className={styles.heroSpark}>
-                <svg
-                  viewBox="0 0 100 28"
-                  className={styles.heroSparkline}
-                  aria-hidden="true"
-                >
-                  {(() => {
-                    const W = 100; const H = 28;
-                    const max = Math.max(...commits, 1);
-                    const pts = commits.map((v, i) => {
-                      const x = (i / (commits.length - 1)) * W;
-                      const y = H - 2 - (v / max) * (H - 6);
-                      return `${x},${y}`;
-                    });
-                    const area = `M ${pts[0]} L ${pts.slice(1).join(" L ")} L ${W},${H} L 0,${H} Z`;
-                    return (
-                      <>
-                        <path d={area} fill="rgba(63,185,80,0.12)" />
-                        <polyline
-                          points={pts.join(" ")}
-                          fill="none"
-                          stroke="#3fb950"
-                          strokeWidth="1.5"
-                          strokeLinejoin="round"
-                          strokeLinecap="round"
-                        />
-                      </>
-                    );
-                  })()}
-                </svg>
-                <span className={styles.heroSparkLabel}>{totalCommits} commits / 12w</span>
-              </div>
-            )}
-            {snapshot?.acmmMode && (
-              <span
-                className={`${styles.modeBadge} ${
-                  snapshot.acmmMode === "SURGE"
-                    ? styles.modeSurge
-                    : styles.modeNormal
-                }`}
-              >
-                {snapshot.acmmMode}
-              </span>
-            )}
+            {(snapshot?.acmmMode ?? registryData?.governorMode) && (() => {
+              const mode = (snapshot?.acmmMode ?? registryData?.governorMode)!.toUpperCase();
+              const cls = mode === "SURGE" ? styles.modeSurge
+                : mode === "BUSY" ? styles.modeBusy
+                : mode === "QUIET" ? styles.modeQuiet
+                : mode === "IDLE" ? styles.modeIdle
+                : styles.modeNormal;
+              return <span className={`${styles.modeBadge} ${cls}`}>{mode}</span>;
+            })()}
             {dakotaStats && <CiBadge status={dakotaStats.ciStatus} />}
           </div>
         </header>
 
-        {/* Stats strip */}
+        {/* Stats strip — always 6 canonical tiles */}
         <div className={styles.statsRow}>
-          {p0Count > 0 && (
-            <StatCard
-              label="P0 Blockers"
-              value={p0Count}
-              accent="#f85149"
-            />
-          )}
-          <StatCard label="P1 This Cycle" value={p1Count} />
           <StatCard
-            label="Frames"
-            value={`${activeAgents.length}/${agents.length}`}
-            sub={
-              workingAgents.length > 0
-                ? `${workingAgents.length} working`
-                : "standing by"
-            }
-            accent={formationColor}
+            label={p0Count > 0 ? `P0 / P1 Issues` : "P1 This Cycle"}
+            value={p0Count > 0 ? `${p0Count}+${p1Count}` : p1Count > 0 ? p1Count : (registryData?.actionableIssues ?? "—")}
+            accent={p0Count > 0 ? "#f85149" : undefined}
+            sub={p0Count > 0 ? `${p0Count} blocker${p0Count > 1 ? "s" : ""}` : p1Count > 0 ? undefined : (registryData?.actionableIssues != null ? "actionable (registry)" : undefined)}
           />
-          {prsNeedingReview > 0 && (
-            <StatCard
-              label="PRs Need Review"
-              value={prsNeedingReview}
-              accent="#d97706"
-            />
-          )}
-          {queueData && (
-            <StatCard
-              label="Approved PRs"
-              value={queueData.prs.approved.length}
-              sub="ready to merge"
-              accent="#3fb950"
-            />
-          )}
-          {queueData && (
-            <StatCard
-              label="Shipped This Cycle"
-              value={
-                (queueData.victories.dreams.count ?? 0) +
-                (queueData.victories.relief.count ?? 0)
-              }
-              sub="features + fixes"
-              accent="#3fb950"
-              spark={victorySparkData([
-                ...queueData.victories.dreams.recent,
-                ...queueData.victories.relief.recent,
-              ].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()), 14)}
-              sparkColor="green"
-            />
-          )}
-          {commits.length > 1 && (
-            <StatCard
-              label="Commit Activity"
-              value={totalCommits}
-              sub="last 12 weeks"
-              spark={commits}
-              sparkColor="green"
-            />
-          )}
-          {repos.length > 0 && (
-            <StatCard label="Repos" value={repos.length} sub="in formation" />
-          )}
-          {snapshot?.medianMergeMins != null && (
-            <StatCard
-              label="Merge Time"
-              value={
-                snapshot.medianMergeMins < 60
-                  ? `${snapshot.medianMergeMins}m`
-                  : `${Math.round((snapshot.medianMergeMins / 60) * 10) / 10}h`
-              }
-              sub="median PR cycle"
-              accent="#39d2c0"
-            />
-          )}
-          {snapshot?.acmmLevel != null && (() => {
-            const info =
-              ACMM_LEVELS[snapshot.acmmLevel!] ?? {
-                label: "Unknown",
-                desc: "",
-                color: "#8b949e",
-              };
+          {(() => {
+            const framesVal = agents.length > 0
+              ? `${activeAgents.length}/${agents.length}`
+              : registryData?.agentCount != null
+                ? `${registryData.agents?.filter(a => a.state !== "paused" && a.state !== "idle").length ?? "?"}/${registryData.agentCount}`
+                : "—";
+            const framesSub = agents.length > 0
+              ? (workingAgents.length > 0 ? `${workingAgents.length} working` : "standing by")
+              : registryData?.agentCount != null
+                ? "registry"
+                : "no snapshot";
             return (
               <StatCard
-                label="ACMM Level"
-                value={`L${snapshot.acmmLevel}`}
-                sub={info.label}
-                accent={info.color}
+                label="Frames"
+                value={framesVal}
+                sub={framesSub}
+                accent={formationColor}
               />
             );
           })()}
+          <StatCard
+            label="ACMM Level"
+            value={snapshot?.acmmLevel ?? registryData?.acmmLevel ?? "—"}
+            sub={(() => {
+              const lvl = snapshot?.acmmLevel ?? registryData?.acmmLevel;
+              return lvl != null ? (ACMM_LEVELS[lvl]?.label ?? `Level ${lvl}`) : "capability level";
+            })()}
+            accent={(() => {
+              const lvl = snapshot?.acmmLevel ?? registryData?.acmmLevel;
+              return lvl != null ? ACMM_LEVELS[lvl]?.color : undefined;
+            })()}
+          />
+          <StatCard
+            label="Shipped This Cycle"
+            value={queueData
+              ? (queueData.victories.dreams.count ?? 0) + (queueData.victories.relief.count ?? 0)
+              : "—"}
+            sub="features + fixes"
+            accent="#3fb950"
+            spark={queueData ? victorySparkData([
+              ...queueData.victories.dreams.recent,
+              ...queueData.victories.relief.recent,
+            ].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()), 14) : undefined}
+            sparkColor="green"
+          />
+          <StatCard
+            label="Test Builds"
+            value={testBuilds ?? "—"}
+            sub="passed in testsuite"
+            accent={testBuilds != null && testBuilds > 0 ? "#3fb950" : undefined}
+          />
+          <StatCard
+            label="Merge Time"
+            value={snapshot?.medianMergeMins != null
+              ? snapshot.medianMergeMins < 60
+                ? `${snapshot.medianMergeMins}m`
+                : `${Math.round((snapshot.medianMergeMins / 60) * 10) / 10}h`
+              : "—"}
+            sub="median PR cycle"
+            accent={snapshot?.medianMergeMins != null ? "#39d2c0" : undefined}
+          />
         </div>
 
-        {/* Guardians / Ghosts */}
-        <div className={styles.destinyColumns}>
-          <GuardiansColumn prs={queueData?.prs ?? null} />
-          <GhostsColumn issues={queueData?.issues ?? null} />
-        </div>
-
-        {/* Victory Log */}
-        <VictoryLog victories={queueData?.victories ?? null} />
-
-        {/* Governor */}
-        <GovernorPanel governor={snapshot?.governor} />
-
-        {/* Commit activity + What agents are doing */}
-        <div className={styles.twoCol}>
+        {/* ── Factory Floor: Frame Formation (left) + sidebar (right) ── */}
+        <div className={styles.factoryFloor}>
+          {/* Left: Frame Formation — the factory floor */}
           <section className={styles.panel}>
             <Heading as="h2" className={styles.panelTitle}>
-              Commit Activity
+              Factory Floor — Live
             </Heading>
-            <p className={styles.panelMeta}>
-              Last 12 weeks &middot; projectbluefin/dakota
-            </p>
-            {commits.length > 1 ? (
-              <div className={styles.sparkWrap}>
-                <Sparkline data={commits} />
-                <div className={styles.sparkLabels}>
-                  <span>12 weeks ago</span>
-                  <span className={styles.sparkTotal}>
-                    {totalCommits} commits
-                  </span>
-                  <span>now</span>
-                </div>
-                <div className={styles.sparkBar}>
-                  {commits.map((v, i) => {
-                    const max = Math.max(...commits, 1);
-                    const h = Math.max((v / max) * 40, v > 0 ? 3 : 1);
-                    return (
-                      <div
-                        key={i}
-                        className={styles.sparkBarItem}
-                        style={{ height: `${h}px` }}
-                        title={`Week ${i + 1}: ${v} commits`}
-                      />
-                    );
-                  })}
-                </div>
+            {agents.length > 0 ? (
+              <div className={styles.agentGrid}>
+                {agents.map((a) => (
+                  <FrameCard key={a.id} agent={a} advisoryItems={advisoriesByAgent[a.name ?? a.id] ?? []} />
+                ))}
               </div>
-            ) : (
-              <div className={styles.empty}>Fetching data…</div>
-            )}
-          </section>
-
-          <section className={styles.panel}>
-            <Heading as="h2" className={styles.panelTitle}>
-              What Frames Are Doing
-            </Heading>
-            {workingAgents.length > 0 ? (
-              <div className={styles.activityList}>
-                {workingAgents.map((a) => {
-                  const lines = meaningfulSummaryLines(a.liveSummary ?? "", 5);
-                  if (lines.length === 0) return null;
+            ) : registryData?.agents && registryData.agents.length > 0 ? (
+              <div className={styles.agentGrid}>
+                {registryData.agents.map((ra) => {
+                  const synth: HiveAgent = {
+                    id: ra.name,
+                    displayName: ra.name.charAt(0).toUpperCase() + ra.name.slice(1),
+                    role: ra.state ?? "unknown",
+                    emoji: "🤖",
+                    color: ra.state === "working" ? "#3fb950" : ra.state === "paused" ? "#f85149" : "#58a6ff",
+                    state: ra.state ?? "idle",
+                    busy: ra.state === "working" ? "working" : "idle",
+                    paused: ra.state === "paused",
+                  };
                   return (
-                    <div key={a.id} className={styles.activityItem}>
-                      <span className={styles.activityInitial}>
-                        {(a.displayName || a.name)
-                          .slice(0, 1)
-                          .toUpperCase()}
-                      </span>
-                      <div>
-                        <div className={styles.activityAgent}>
-                          {a.displayName}
-                        </div>
-                        {lines.map((line, i) => (
-                          <div key={i} className={styles.activityText}>{line}</div>
-                        ))}
-                      </div>
-                    </div>
+                    <FrameCard key={ra.name} agent={synth} advisoryItems={[]} />
                   );
                 })}
               </div>
             ) : (
-              <div className={styles.empty}>
-                {agents.length > 0
-                  ? "Frames are between tasks"
-                  : "No Frame data — snapshot updating"}
-              </div>
+              <div className={styles.empty}>No Frame data — snapshot updating</div>
             )}
           </section>
+
+          {/* Right: Governor + Victory Log + What Frames Are Working On + Health */}
+          <div className={styles.factorySidebar}>
+            <GovernorPanel governor={snapshot?.governor} registry={registryData} />
+            <VictoryLog victories={queueData?.victories ?? null} />
+            {advisoryItems.length > 0 && (
+              <section className={styles.panel}>
+                <Heading as="h2" className={styles.panelTitle}>
+                  What Frames Are Working On
+                </Heading>
+                <p className={styles.panelMeta}>
+                  Advisory digest — findings, bugs, CI failures logged by each Frame
+                </p>
+                <AgentWorkLog
+                  agents={agents}
+                  items={advisoryItems}
+                  advisoryIssue={snapshot?.advisoryIssue}
+                  config={config}
+                />
+              </section>
+            )}
+            {/* Registry Health Checks */}
+            {registryData?.health?.checks && registryData.health.checks.length > 0 && (
+              <section className={styles.panel}>
+                <Heading as="h2" className={styles.panelTitle}>
+                  System Health
+                </Heading>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginTop: "0.5rem" }}>
+                  {registryData.health.checks.map((chk) => (
+                    <div key={chk.name} style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
+                      <span style={{
+                        width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+                        background: chk.status === "ok" ? "#3fb950" : chk.status === "warn" ? "#d97706" : "#f85149",
+                      }} />
+                      <span style={{ color: "#e6edf3", textTransform: "capitalize" }}>{chk.name.replace(/_/g, " ")}</span>
+                      <span style={{ marginLeft: "auto", color: chk.status === "ok" ? "#3fb950" : chk.status === "warn" ? "#d97706" : "#f85149", fontFamily: "monospace", fontWeight: 700, fontSize: "0.7rem" }}>
+                        {chk.status.toUpperCase()}
+                      </span>
+                      {chk.detail && (
+                        <span style={{ color: "#484f58", fontSize: "0.68rem", maxWidth: "8rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={chk.detail}>
+                          {chk.detail}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {registryData.online != null && (
+                  <p className={styles.panelMeta} style={{ marginTop: "0.5rem" }}>
+                    Registry: <span style={{ color: registryData.online ? "#3fb950" : "#f85149", fontWeight: 700 }}>
+                      {registryData.online ? "ONLINE" : "OFFLINE"}
+                    </span>
+                    {registryData.lastHeartbeat && (
+                      <> &middot; heartbeat {relTime(registryData.lastHeartbeat)}</>
+                    )}
+                  </p>
+                )}
+              </section>
+            )}
+          </div>
         </div>
 
-        {/* Frame formation */}
-        {agents.length > 0 && (
+        {/* ── Destiny columns: Guardians | Ghosts ── */}
+        <div className={styles.destinyColumns}>
+          <GuardiansColumn discussions={communityDiscussions} />
+          <GhostsColumn hivePRs={hivePRsList} copilotPRs={copilotPRsList} />
+        </div>
+
+        {/* ── Recently Merged (full width) ── */}
+        <MergedPRFeed prs={mergedPRs} />
+
+        {/* ── Registry Task Leaderboard ── */}
+        {registryData?.leaderboard && registryData.leaderboard.length > 0 && (
           <section className={styles.panel}>
             <Heading as="h2" className={styles.panelTitle}>
-              Frame Formation
+              Task Leaderboard
             </Heading>
-            <div className={styles.agentGrid}>
-              {agents.map((a) => (
-                <FrameCard key={a.id} agent={a} advisoryItems={advisoriesByAgent[a.name] ?? []} />
-              ))}
+            <p className={styles.panelMeta}>
+              Tasks completed by each contributor via the hive registry &mdash; updated live
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "0.5rem", marginTop: "0.75rem" }}>
+              {registryData.leaderboard
+                .sort((a, b) => b.tasks_completed - a.tasks_completed)
+                .slice(0, 12)
+                .map((entry, idx) => (
+                  <div key={entry.github_username} style={{
+                    display: "flex", alignItems: "center", gap: "0.5rem",
+                    background: "#161b22", borderRadius: "6px", padding: "0.4rem 0.6rem",
+                    border: idx === 0 ? "1px solid #d97706" : "1px solid #21262d",
+                  }}>
+                    <span style={{ fontSize: "0.7rem", color: "#484f58", fontFamily: "monospace", width: "1.2rem", flexShrink: 0 }}>
+                      #{idx + 1}
+                    </span>
+                    <img
+                      src={entry.avatar_url || `https://github.com/${entry.github_username}.png?size=32`}
+                      alt={entry.github_username}
+                      width={24} height={24}
+                      style={{ borderRadius: "50%", flexShrink: 0 }}
+                    />
+                    <span style={{ fontSize: "0.8rem", color: "#e6edf3", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {entry.github_username}
+                    </span>
+                    <span style={{
+                      fontSize: "0.75rem", fontWeight: 700, fontFamily: "monospace",
+                      color: idx === 0 ? "#d97706" : idx < 3 ? "#3fb950" : "#58a6ff",
+                    }}>
+                      {entry.tasks_completed}
+                    </span>
+                  </div>
+                ))}
             </div>
           </section>
         )}
 
-        {/* Frame work log */}
-        {advisoryItems.length > 0 && (
-          <section className={styles.panel}>
-            <Heading as="h2" className={styles.panelTitle}>
-              What Frames Are Working On
-            </Heading>
-            <p className={styles.panelMeta}>
-              Advisory digest — findings, bugs, CI failures logged by each Frame
-            </p>
-            <AgentWorkLog
-              agents={agents}
-              items={advisoryItems}
-              advisoryIssue={snapshot?.advisoryIssue}
-              config={config}
-            />
-          </section>
-        )}
-
-        {/* PR queue chart */}
-        {repoPRs.length > 0 && (
-          <section className={styles.panel}>
-            <Heading as="h2" className={styles.panelTitle}>PR Queue</Heading>
-            <p className={styles.panelMeta}>
-              Open pull requests across formation repos &middot; [agent] = hive
-              agent authored
-            </p>
-            <PrQueueChart data={repoPRs} />
-          </section>
-        )}
-
-        {/* Merged + Contributors */}
-        <MergedPRFeed prs={mergedPRs} />
+        {/* ── Community ── */}
         <ContributorWall prs={mergedPRs} history={hiveHistory} />
-        <HistoryTrends history={hiveHistory} />
-        <ContributorLeaderboard history={hiveHistory} />
+
+        {/* ── History Zone: Trends | Community Builders ── */}
+        <div className={styles.twoCol}>
+          <HistoryTrends history={hiveHistory} />
+          <ContributorLeaderboard history={hiveHistory} />
+        </div>
 
         {/* Velocity + Org stats */}
         <div className={styles.twoCol}>
@@ -2992,7 +3229,7 @@ export default function HiveFactoryDashboard(): React.JSX.Element {
             cadenceMatrix={snapshot?.cadenceMatrix}
             mode={snapshot?.governor?.mode}
           />
-          <FrameOfDay agent={agentOfDay} advisoryItems={advisoriesByAgent[agentOfDay?.name ?? ""] ?? []} />
+          <FrameOfDay agent={agentOfDay} advisoryItems={advisoriesByAgent[agentOfDay?.name ?? agentOfDay?.id ?? ""] ?? []} />
         </div>
 
         {/* Formation log */}
@@ -3093,6 +3330,10 @@ export default function HiveFactoryDashboard(): React.JSX.Element {
             Data:{" "}
             <Link href="https://kubestellar.io/live/hive/bluefin/">
               Hive snapshot
+            </Link>{" "}
+            +{" "}
+            <Link href={HOSTED_INSTANCE_URL}>
+              hosted.hive
             </Link>{" "}
             +{" "}
             <Link href="https://queue.projectbluefin.io/">
